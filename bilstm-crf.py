@@ -1,8 +1,9 @@
 import os
 import torch
 import torch.nn as nn
+from torchcrf import CRF
 from itertools import chain
-from sklearn.metrics import f1_score, accuracy_score
+from sklearn.metrics import f1_score, accuracy_score, precision_score
 from torch.utils.data import Dataset, DataLoader
 
 
@@ -71,6 +72,7 @@ class MyDataset(Dataset):
             data=data_index, dtype=torch.long, device=device)
         tag_index = torch.tensor(
             data=tag_index, dtype=torch.long, device=device)
+
         return data_index, tag_index
 
     def __len__(self):
@@ -78,19 +80,21 @@ class MyDataset(Dataset):
         return len(self.datas)
 
     def batch_data_pro(self, batch_datas):
-
-        data, tag = [], []
-        da_len = []
+        data, tag, mask, da_len = [], [], [], []
         for da, ta in batch_datas:
+            l = len(da)
             data.append(da)
             tag.append(ta)
-            da_len.append(len(da))
+            da_len.append(l)
+            mask.append(torch.tensor([1] * l, dtype=torch.bool, device=device))
 
         data = nn.utils.rnn.pad_sequence(
             data, batch_first=True, padding_value=self.word_2_index["<PAD>"])
         tag = nn.utils.rnn.pad_sequence(
             tag, batch_first=True, padding_value=self.tag_2_index["<PAD>"])
-        return data, tag, da_len
+        mask = nn.utils.rnn.pad_sequence(
+            mask, batch_first=True)
+        return data, tag, da_len, mask
 
 
 class BiLSTM(nn.Module):
@@ -106,11 +110,11 @@ class BiLSTM(nn.Module):
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         self.lstm = nn.LSTM(embedding_dim, hidden_size,
                             batch_first=True, bidirectional=bidirectional)
-
         if bidirectional:
             self.classifier = nn.Linear(hidden_size * 2, class_num)
         else:
             self.classifier = nn.Linear(hidden_size, class_num)
+        self.crf = CRF(class_num, batch_first=True)
 
     def forward(self, data_index, data_len):
         em = self.embedding(data_index)
@@ -123,41 +127,47 @@ class BiLSTM(nn.Module):
 
         return pre
 
+    def loss(self, emissions, tags, mask):
+        loss = self.crf(emissions, tags, mask)
+        return -loss
+
+    def decode(self, emissions, mask=None):
+        out = self.crf.decode(emissions, mask)
+        return out
+
     def fit(self,  train_dataloader, dev_dataloader, word_2_index):
         """
         训练模型
         """
-        epoch = 10
+        epoch = 20
         lr = 0.001
 
-        loss_fn = nn.CrossEntropyLoss(ignore_index=word_2_index["<PAD>"])
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
         for e in range(epoch):
             self.train()
-            for data, tag, da_len in train_dataloader:
+            for data, tag, da_len, mask in train_dataloader:
                 pred = self.forward(data, da_len)
-                loss = loss_fn(pred.transpose(1, 2), tag)
+                loss = self.loss(pred, tag, mask)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
             self.eval()
-            for data, tag, da_len in dev_dataloader:
+            for data, tag, da_len, mask in dev_dataloader:
                 tag = nn.utils.rnn.unpad_sequence(
                     tag, da_len, batch_first=True)
                 tag = [list(x.cpu().numpy()) for x in tag]
                 pred = self.forward(data, da_len)
-                pred = nn.utils.rnn.unpad_sequence(
-                    torch.argmax(pred, dim=-1), da_len, batch_first=True)
-                pred = [list(x.cpu().numpy()) for x in pred]
+                pred = self.decode(pred, mask)
 
                 y_pred = list(chain.from_iterable(pred))
                 y_true = list(chain.from_iterable(tag))
                 f1 = f1_score(y_true, y_pred, average="micro")
                 accuracy = accuracy_score(y_true, y_pred)
+                precision = precision_score(y_true, y_pred, average="micro")
             print(
-                f"test_f1:{round(f1,2)},\ttest_accuracy:{round(accuracy, 2)}")
+                f"f1:{round(f1,2)},\taccuracy:{round(accuracy, 2)}\tprecision:{round(precision,2)}")
 
     def predict(self,  word_2_index, index_2_tag, filepath):
         self.load_state_dict(torch.load(filepath))
@@ -168,16 +178,16 @@ class BiLSTM(nn.Module):
         text_len = [len(text)]
         index_2_tag = {i: c for i, c in enumerate(tag_2_index)}
         pred = self.forward(text_index, text_len)
-        pred = torch.argmax(pred, dim=-1).reshape(-1).cpu().numpy()
-        pred = [index_2_tag[i] for i in pred]
+        pred = self.decode(pred)
+        pred = [index_2_tag[i] for i in pred[0]]
         print([f'{w}_{s}' for w, s in zip(text, pred)])
 
 
 if __name__ == "__main__":
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     print(device)
-    type = "predict"
-    model_path = "models/bilstm.pth"
+    type = "fit"
+    model_path = "models/bilstm-crf.pth"
 
     # 准备数据
     train_word_lists, train_tag_lists, word_2_index, tag_2_index = build_corpus(
