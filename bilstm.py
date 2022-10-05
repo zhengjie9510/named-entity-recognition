@@ -123,17 +123,16 @@ class BiLSTM(nn.Module):
 
         return pre
 
-    def fit(self,  train_dataloader, dev_dataloader, word_2_index):
+    def fit(self,  train_dataloader, epoch, dev_dataloader, word_2_index):
         """
         训练模型
         """
-        epoch = 10
         lr = 0.001
-
         loss_fn = nn.CrossEntropyLoss(ignore_index=word_2_index["<PAD>"])
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
         for e in range(epoch):
+            print("Epoch", f"{e+1}/{epoch}")
             self.train()
             for data, tag, da_len in train_dataloader:
                 pred = self.forward(data, da_len)
@@ -141,6 +140,7 @@ class BiLSTM(nn.Module):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                print(f'loss:{round(loss.item(), 2)}', end='\r')
 
             self.eval()
             for data, tag, da_len in dev_dataloader:
@@ -155,9 +155,7 @@ class BiLSTM(nn.Module):
                 y_pred = list(chain.from_iterable(pred))
                 y_true = list(chain.from_iterable(tag))
                 f1 = f1_score(y_true, y_pred, average="micro")
-                accuracy = accuracy_score(y_true, y_pred)
-            print(
-                f"test_f1:{round(f1,2)},\ttest_accuracy:{round(accuracy, 2)}")
+            print(f"loss:{round(loss.item(),2)}\tf1:{round(f1,3)}")
 
     def predict(self,  word_2_index, index_2_tag, filepath):
         self.load_state_dict(torch.load(filepath))
@@ -210,7 +208,7 @@ if __name__ == "__main__":
 
     if type == 'fit':
         # 模型训练
-        model.fit(train_dataloader, dev_dataloader, word_2_index)
+        model.fit(train_dataloader, 20, dev_dataloader, word_2_index)
         # 保存模型
         torch.save(model.state_dict(), model_path)
     # 预测

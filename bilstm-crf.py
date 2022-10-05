@@ -97,7 +97,7 @@ class MyDataset(Dataset):
         return data, tag, da_len, mask
 
 
-class BiLSTM(nn.Module):
+class BiLSTMCRF(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, hidden_size, bidirectional, class_num):
         """
         num_embeddings: size of the dictionary of embeddings  
@@ -135,16 +135,14 @@ class BiLSTM(nn.Module):
         out = self.crf.decode(emissions, mask)
         return out
 
-    def fit(self,  train_dataloader, dev_dataloader, word_2_index):
+    def fit(self, train_dataloader, epoch, dev_dataloader):
         """
         训练模型
         """
-        epoch = 20
         lr = 0.001
-
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-
         for e in range(epoch):
+            print("Epoch", f"{e+1}/{epoch}")
             self.train()
             for data, tag, da_len, mask in train_dataloader:
                 pred = self.forward(data, da_len)
@@ -152,7 +150,7 @@ class BiLSTM(nn.Module):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-
+                print(f'loss:{round(loss.item(), 2)}', end='\r')
             self.eval()
             for data, tag, da_len, mask in dev_dataloader:
                 tag = nn.utils.rnn.unpad_sequence(
@@ -164,10 +162,7 @@ class BiLSTM(nn.Module):
                 y_pred = list(chain.from_iterable(pred))
                 y_true = list(chain.from_iterable(tag))
                 f1 = f1_score(y_true, y_pred, average="micro")
-                accuracy = accuracy_score(y_true, y_pred)
-                precision = precision_score(y_true, y_pred, average="micro")
-            print(
-                f"f1:{round(f1,2)},\taccuracy:{round(accuracy, 2)}\tprecision:{round(precision,2)}")
+            print(f"loss:{round(loss.item(),2)}\tf1:{round(f1,3)}")
 
     def predict(self,  word_2_index, index_2_tag, filepath):
         self.load_state_dict(torch.load(filepath))
@@ -186,7 +181,7 @@ class BiLSTM(nn.Module):
 if __name__ == "__main__":
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     print(device)
-    type = "fit"
+    type = "predict"
     model_path = "models/bilstm-crf.pth"
 
     # 准备数据
@@ -200,8 +195,8 @@ if __name__ == "__main__":
     bidirectional = True
     class_num = len(tag_2_index)
     # 建立模型
-    model = BiLSTM(num_embeddings, embedding_dim,
-                   hidden_size, bidirectional, class_num)
+    model = BiLSTMCRF(num_embeddings, embedding_dim,
+                      hidden_size, bidirectional, class_num)
     model = model.to(device)
     # 设置数据集参数
     train_batch_size = 64
@@ -220,7 +215,7 @@ if __name__ == "__main__":
 
     if type == 'fit':
         # 模型训练
-        model.fit(train_dataloader, dev_dataloader, word_2_index)
+        model.fit(train_dataloader, 20, dev_dataloader)
         # 保存模型
         torch.save(model.state_dict(), model_path)
     # 预测
