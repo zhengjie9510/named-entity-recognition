@@ -1,100 +1,10 @@
-import os
 import torch
 import torch.nn as nn
 from torchcrf import CRF
 from itertools import chain
-from sklearn.metrics import f1_score, accuracy_score, precision_score
-from torch.utils.data import Dataset, DataLoader
-
-
-def build_corpus(split, make_vocab=True, data_dir="data"):
-    """读取数据"""
-    assert split in ['train', 'dev', 'test']
-
-    word_lists = []
-    tag_lists = []
-    with open(os.path.join(data_dir, split+".char.bmes"), 'r', encoding='utf-8') as f:
-        word_list = []
-        tag_list = []
-        for line in f:
-            if line != '\n':
-                word, tag = line.strip('\n').split()
-                word_list.append(word)
-                tag_list.append(tag)
-            else:
-                word_lists.append(word_list)
-                tag_lists.append(tag_list)
-                word_list = []
-                tag_list = []
-
-    word_lists = sorted(word_lists, key=lambda x: len(x), reverse=True)
-    tag_lists = sorted(tag_lists, key=lambda x: len(x), reverse=True)
-
-    # 如果make_vocab为True，还需要返回word2id和tag2id
-    if make_vocab:
-        word2id = build_map(word_lists)
-        tag2id = build_map(tag_lists)
-        word2id['<UNK>'] = len(word2id)
-        word2id['<PAD>'] = len(word2id)
-
-        tag2id['<PAD>'] = len(tag2id)
-        return word_lists, tag_lists, word2id, tag2id
-    else:
-        return word_lists, tag_lists
-
-
-def build_map(lists):
-    maps = {}
-    for list_ in lists:
-        for e in list_:
-            if e not in maps:
-                maps[e] = len(maps)
-    return maps
-
-
-class MyDataset(Dataset):
-    def __init__(self, datas, tags, word_2_index, tag_2_index):
-        self.datas = datas
-        self.tags = tags
-        self.word_2_index: dict = word_2_index
-        self.tag_2_index: dict = tag_2_index
-
-    def __getitem__(self, index):
-        global device
-        data = self.datas[index]
-        tag = self.tags[index]
-
-        data_index = [self.word_2_index.get(
-            i, self.word_2_index["<UNK>"]) for i in data]
-        tag_index = [self.tag_2_index[i] for i in tag]
-
-        data_index = torch.tensor(
-            data=data_index, dtype=torch.long, device=device)
-        tag_index = torch.tensor(
-            data=tag_index, dtype=torch.long, device=device)
-
-        return data_index, tag_index
-
-    def __len__(self):
-        assert len(self.datas) == len(self.tags)
-        return len(self.datas)
-
-    def batch_data_pro(self, batch_datas):
-        data, tag, mask, da_len = [], [], [], []
-        for da, ta in batch_datas:
-            l = len(da)
-            data.append(da)
-            tag.append(ta)
-            da_len.append(l)
-            mask.append(torch.tensor([1] * l, dtype=torch.bool, device=device))
-
-        data = nn.utils.rnn.pad_sequence(
-            data, batch_first=True, padding_value=self.word_2_index["<PAD>"])
-        tag = nn.utils.rnn.pad_sequence(
-            tag, batch_first=True, padding_value=self.tag_2_index["<PAD>"])
-        mask = nn.utils.rnn.pad_sequence(
-            mask, batch_first=True)
-        return data, tag, da_len, mask
+from sklearn.metrics import f1_score
+from data import DataProcess, MyDataset
+from torch.utils.data import DataLoader
 
 
 class BiLSTMCRF(nn.Module):
@@ -150,7 +60,7 @@ class BiLSTMCRF(nn.Module):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                print(f'loss:{round(loss.item(), 2)}', end='\r')
+                print(f'loss: {round(loss.item(), 2)}', end='\r')
             self.eval()
             for data, tag, da_len, mask in dev_dataloader:
                 tag = nn.utils.rnn.unpad_sequence(
@@ -162,7 +72,7 @@ class BiLSTMCRF(nn.Module):
                 y_pred = list(chain.from_iterable(pred))
                 y_true = list(chain.from_iterable(tag))
                 f1 = f1_score(y_true, y_pred, average="micro")
-            print(f"loss:{round(loss.item(),2)}\tf1:{round(f1,3)}")
+            print(f"loss: {round(loss.item(),2)}\tf1: {round(f1,3)}")
 
     def predict(self,  word_2_index, index_2_tag, filepath):
         self.load_state_dict(torch.load(filepath))
@@ -171,7 +81,6 @@ class BiLSTMCRF(nn.Module):
             [word_2_index.get(i, word_2_index["<UNK>"]) for i in text]]
         text_index = torch.tensor(text_index, device=device)
         text_len = [len(text)]
-        index_2_tag = {i: c for i, c in enumerate(tag_2_index)}
         pred = self.forward(text_index, text_len)
         pred = self.decode(pred)
         pred = [index_2_tag[i] for i in pred[0]]
@@ -181,19 +90,30 @@ class BiLSTMCRF(nn.Module):
 if __name__ == "__main__":
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     print(device)
-    type = "predict"
+    mode = "fit"
     model_path = "models/bilstm-crf.pth"
-
     # 准备数据
-    train_word_lists, train_tag_lists, word_2_index, tag_2_index = build_corpus(
-        "train")
-    dev_word_lists, dev_tag_lists = build_corpus("dev", make_vocab=False)
+    # 训练数据
+    filepath = 'data/cluener/train.json'
+    process = DataProcess(filepath=filepath)
+    train_word_lists, train_label_lists = process.get_samples()
+    word_2_index = process.build_map(train_word_lists)
+    label_2_index = process.build_map(train_label_lists)
+    word_2_index['<UNK>'] = len(word_2_index)
+    word_2_index['<PAD>'] = len(word_2_index)
+    label_2_index['<PAD>'] = len(label_2_index)
+    # 验证数据
+    filepath = 'data/cluener/dev.json'
+    process = DataProcess(filepath=filepath)
+    dev_word_lists, dev_label_lists = process.get_samples()
+    dev_word_lists = process.sort_by_length(dev_word_lists)
+    dev_label_lists = process.sort_by_length(dev_label_lists)
     # 设置模型参数
     num_embeddings = len(word_2_index)
     embedding_dim = 128
     hidden_size = 129
     bidirectional = True
-    class_num = len(tag_2_index)
+    class_num = len(label_2_index)
     # 建立模型
     model = BiLSTMCRF(num_embeddings, embedding_dim,
                       hidden_size, bidirectional, class_num)
@@ -203,17 +123,16 @@ if __name__ == "__main__":
     dev_batch_size = len(dev_word_lists)
     # 构建数据集
     train_dataset = MyDataset(
-        train_word_lists, train_tag_lists, word_2_index, tag_2_index)
+        train_word_lists, train_label_lists, word_2_index, label_2_index, device)
     train_dataloader = DataLoader(train_dataset, batch_size=train_batch_size,
                                   shuffle=False, collate_fn=train_dataset.batch_data_pro)
-    dev_dataset = MyDataset(dev_word_lists, dev_tag_lists,
-                            word_2_index, tag_2_index)
+    dev_dataset = MyDataset(dev_word_lists, dev_label_lists,
+                            word_2_index, label_2_index, device)
     dev_dataloader = DataLoader(dev_dataset, batch_size=dev_batch_size,
                                 shuffle=False, collate_fn=dev_dataset.batch_data_pro)
-    # 构建index转tag字典
-    index_2_tag = {i: c for i, c in enumerate(tag_2_index)}
-
-    if type == 'fit':
+    # 构建index转label字典
+    index_2_label = {i: c for i, c in enumerate(label_2_index)}
+    if mode == 'fit':
         # 模型训练
         model.fit(train_dataloader, 20, dev_dataloader)
         # 保存模型
@@ -221,4 +140,4 @@ if __name__ == "__main__":
     # 预测
     else:
         while True:
-            model.predict(word_2_index, index_2_tag, model_path)
+            model.predict(word_2_index, index_2_label, model_path)
