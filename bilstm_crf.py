@@ -94,7 +94,7 @@ if __name__ == "__main__":
     model_path = "models/bilstm-crf.pth"
     # 准备数据
     # 训练数据
-    filepath = 'data/cluener/train.json'
+    filepath = 'data/resume/train.char.bmes'
     process = DataProcess(filepath=filepath)
     train_word_lists, train_label_lists = process.get_samples()
     word_2_index = process.build_map(train_word_lists)
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     word_2_index['<PAD>'] = len(word_2_index)
     label_2_index['<PAD>'] = len(label_2_index)
     # 验证数据
-    filepath = 'data/cluener/dev.json'
+    filepath = 'data/resume/test.char.bmes'
     process = DataProcess(filepath=filepath)
     dev_word_lists, dev_label_lists = process.get_samples()
     dev_word_lists = process.sort_by_length(dev_word_lists)

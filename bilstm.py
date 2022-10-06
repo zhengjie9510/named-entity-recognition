@@ -86,7 +86,7 @@ class BiLSTM(nn.Module):
 if __name__ == "__main__":
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     print(device)
-    mode = "fit"
+    mode = "predict"
     model_path = "models/bilstm.pth"
     # 准备数据
     # 训练数据
