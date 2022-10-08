@@ -3,15 +3,16 @@ import json
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
+from transformers import AutoTokenizer
 
 
 class MyDataset(Dataset):
     def __init__(self, datas, tags, word_2_index, tag_2_index, device):
+        self.device = device
         self.datas = datas
         self.tags = tags
         self.word_2_index: dict = word_2_index
         self.tag_2_index: dict = tag_2_index
-        self.device = device
 
     def __getitem__(self, index):
         data = self.datas[index]
@@ -116,3 +117,8 @@ class DataProcess():
                 if e not in maps:
                     maps[e] = len(maps)
         return maps
+
+
+if __name__ == "__main__":
+    tokenizer = AutoTokenizer.from_pretrained('bert-base-chinese')
+    print('hello')
