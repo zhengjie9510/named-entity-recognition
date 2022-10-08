@@ -1,5 +1,6 @@
 import json
 import torch
+import numpy as np
 import torch.nn as nn
 from torchcrf import CRF
 from itertools import chain
@@ -156,7 +157,7 @@ class MyDataset(Dataset):
 class BiLSTMCRF(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, hidden_size, bidirectional, class_num):
         """
-        num_embeddings: size of the dictionary of embeddings  
+        num_embeddings: size of the dictionary of embeddings
         embedding_dim: the size of each embedding vector
         hidden_size: The number of features in the hidden state `h`
         bidirectional: If ``True``, becomes a bidirectional LSTM
@@ -213,22 +214,30 @@ class BiLSTMCRF(nn.Module):
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
         for e in range(epoch):
             print("Epoch", f"{e+1}/{epoch}")
+            train_loss, train_f1 = [], []
+            train_num = 0
             self.train()
-            for i, (X, y, mask, X_len) in enumerate(train_dataloader):
+            for X, y, mask, X_len in train_dataloader:
                 loss = self.forward_with_crf(X, y, mask, X_len)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                f1 = self._compute_matrix(X, y, mask, X_len)
-                print('train_loss: %.2f' %
-                      loss, '\ttrain_f1: %.2f' % f1, end='\r')
+                train_num = train_num + X.__len__()
+                train_loss.append(loss.cpu().detach().numpy().sum())
+                train_f1.append(self._compute_matrix(X, y, mask, X_len))
+                print('train_loss: %.2f' % (np.sum(train_loss)/train_num),
+                      '\ttrain_f1: %.2f' % (np.mean(train_f1)), end='\r')
             if dev_dataloader:
+                dev_loss, dev_f1 = [], []
+                dev_num = 0
                 self.eval()
                 for X, y, mask, X_len in dev_dataloader:
-                    dev_loss = self.forward_with_crf(X, y, mask, X_len)
-                    dev_f1 = self._compute_matrix(X, y, mask, X_len)
-                print('train_loss: %.2f' % loss, '\ttrain_f1: %.2f' % f1,
-                      '\tdev_loss: %.2f' % dev_loss, '\tdev_f1: %.2f' % dev_f1)
+                    dev_loss.append(self.forward_with_crf(
+                        X, y, mask, X_len).cpu().detach().numpy().sum())
+                    dev_f1.append(self._compute_matrix(X, y, mask, X_len))
+                    dev_num = dev_num + X.__len__()
+                print('train_loss: %.2f' % (np.sum(train_loss)/train_num), '\ttrain_f1: %.2f' % (np.mean(train_f1)),
+                      '\tdev_loss: %.2f' % (np.sum(dev_loss)/dev_num), '\tdev_f1: %.2f' % (np.mean(dev_f1)))
 
     def predict(self, tokenizer: Tokenizer, text, device):
         text_index = [tokenizer.encode(text)]
@@ -238,14 +247,6 @@ class BiLSTMCRF(nn.Module):
         pred = self.decode(pred)
         pred = tokenizer.decode_label(pred[0])
         print([f'{w}_{s}' for w, s in zip(text, pred)])
-
-    def test(self, dataloader):
-        self.eval()
-        for X, y, mask, X_len in dataloader:
-            loss = self.forward_with_crf(X, y, mask, X_len)
-            f1 = self._compute_matrix(X, y, mask, X_len)
-        print('eval_loss: %.2f' % loss, '\teval_f1: %.2f' % f1)
-        return loss, f1
 
 
 if __name__ == "__main__":
@@ -258,9 +259,6 @@ if __name__ == "__main__":
     process = DataProcess(filepath='cluener/dev.json')
     dev_word_lists, dev_label_lists = process.get_processed_samples(
         sort=True)
-    process = DataProcess(filepath='cluener/test.json')
-    test_word_lists, test_label_lists = process.get_processed_samples(
-        sort=True)
     tokenizer = Tokenizer(train_word_lists, train_label_lists)
     # ///////////////////
     num_embeddings = len(tokenizer.vocab)
@@ -269,7 +267,7 @@ if __name__ == "__main__":
     hidden_size = 129
     bidirectional = True
     train_batch_size = 64
-    epoch = 20
+    epoch = 10
     model_path = "models/bilstm.pth"
     # ///////////////////
     train_dataset = MyDataset(
@@ -280,20 +278,13 @@ if __name__ == "__main__":
         dev_word_lists, dev_label_lists, tokenizer, device)
     dev_dataloader = DataLoader(dev_dataset, batch_size=len(dev_word_lists),
                                 shuffle=False, collate_fn=dev_dataset.batch_data_pro)
-    test_dataset = MyDataset(
-        test_word_lists, test_label_lists, tokenizer, device)
-    test_dataloader = DataLoader(test_dataset, batch_size=len(test_word_lists),
-                                 shuffle=False, collate_fn=test_dataset.batch_data_pro)
     # ///////////////////
     model = BiLSTMCRF(num_embeddings, embedding_dim,
                       hidden_size, bidirectional, class_num)
     model = model.to(device)
     # ///////////////////
-    # model.fit(train_dataloader, epoch, dev_dataloader=dev_dataloader)
-    # torch.save(model.state_dict(), model_path)
-    # ///////////////////
-    model.load_state_dict(torch.load(model_path))
-    model.test(test_dataloader)
+    model.fit(train_dataloader, epoch, dev_dataloader=dev_dataloader)
+    torch.save(model.state_dict(), model_path)
     # ///////////////////
     model.load_state_dict(torch.load(model_path))
     while True:
