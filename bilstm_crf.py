@@ -7,8 +7,6 @@ from itertools import chain
 from sklearn.metrics import f1_score
 from torch.utils.data import Dataset, DataLoader
 
-from metrix import Metrics
-
 
 class Tokenizer():
     def __init__(self, word_lists, label_lists, pad='<PAD>', unknown='<UNK>') -> None:
@@ -187,7 +185,7 @@ class BiLSTMCRF(nn.Module):
 
     def forward_with_crf(self, X, y, mask, X_len):
         pred = self.forward(X, X_len)
-        loss = self.crf(pred, y, mask)
+        loss = self.crf(pred, y, mask, reduction='mean')
         return -loss
 
     def decode(self, emissions, mask=None):
@@ -217,7 +215,6 @@ class BiLSTMCRF(nn.Module):
         for e in range(epoch):
             print("Epoch", f"{e+1}/{epoch}")
             train_loss, train_f1 = [], []
-            train_num = 0
             self.train()
             for X, y, mask, X_len in train_dataloader:
                 loss = self.forward_with_crf(X, y, mask, X_len)
@@ -227,21 +224,18 @@ class BiLSTMCRF(nn.Module):
                 train_loss.append(loss.cpu().detach().numpy().sum())
                 f1 = self._compute_matrix(X, y, mask, X_len)
                 train_f1.append(f1)
-                train_num = train_num + X.__len__()
-                print('train_loss: %.4f' % (np.sum(train_loss)/train_num),
-                      '\ttrain_f1: %.4f' % (np.mean(train_f1)), end='\r')
+                print('train_loss: %.4f' % np.mean(train_loss),
+                      '\ttrain_f1: %.4f' % np.mean(train_f1), end='\r')
             if dev_dataloader:
                 dev_loss, dev_f1 = [], []
-                dev_num = 0
                 self.eval()
                 for X, y, mask, X_len in dev_dataloader:
                     loss = self.forward_with_crf(X, y, mask, X_len)
                     dev_loss.append(loss.cpu().detach().numpy().sum())
                     f1 = self._compute_matrix(X, y, mask, X_len)
                     dev_f1.append(f1)
-                    dev_num = dev_num + X.__len__()
-                print('train_loss: %.4f' % (np.sum(train_loss)/train_num), '\ttrain_f1: %.4f' % (np.mean(train_f1)),
-                      '\tdev_loss: %.4f' % (np.sum(dev_loss)/dev_num), '\tdev_f1: %.4f' % (np.mean(dev_f1)))
+                print('train_loss: %.4f' % np.mean(train_loss), '\ttrain_f1: %.4f' % np.mean(train_f1),
+                      '\tdev_loss: %.4f' % np.mean(dev_loss), '\tdev_f1: %.4f' % np.mean(dev_f1))
 
     def predict(self, tokenizer: Tokenizer, text, device):
         text_index = [tokenizer.encode(text)]
@@ -268,10 +262,10 @@ if __name__ == "__main__":
     num_embeddings = len(tokenizer.vocab)
     class_num = len(tokenizer.label_vocab)
     embedding_dim = 128
-    hidden_size = 129
+    hidden_size = 384
     bidirectional = True
-    train_batch_size = 64
-    epoch = 15
+    train_batch_size = 32
+    epoch = 4
     model_path = "models/bilstm-crf.pth"
     # ///////////////////
     train_dataset = MyDataset(
@@ -287,8 +281,8 @@ if __name__ == "__main__":
                       hidden_size, bidirectional, class_num)
     model = model.to(device)
     # ///////////////////
-    # model.fit(train_dataloader, epoch, dev_dataloader=dev_dataloader)
-    # torch.save(model.state_dict(), model_path)
+    model.fit(train_dataloader, epoch, dev_dataloader=dev_dataloader)
+    torch.save(model.state_dict(), model_path)
     # ///////////////////
     model.load_state_dict(torch.load(model_path, map_location=device))
     while True:

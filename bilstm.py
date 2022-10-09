@@ -185,6 +185,7 @@ class BiLSTM(nn.Module):
         pred = self.forward(X,  X_len)
         pred = nn.utils.rnn.unpad_sequence(
             torch.argmax(pred, dim=-1), X_len, batch_first=True)
+        pred = [list(i.cpu().numpy()) for i in pred]
 
         y = nn.utils.rnn.unpad_sequence(
             y,  X_len, batch_first=True)
@@ -207,7 +208,6 @@ class BiLSTM(nn.Module):
         for e in range(epoch):
             print("Epoch", f"{e+1}/{epoch}")
             train_loss, train_f1 = [], []
-            train_num = 0
             self.train()
             for X, y, mask, X_len in train_dataloader:
                 pred = self.forward(X, X_len)
@@ -218,12 +218,10 @@ class BiLSTM(nn.Module):
                 train_loss.append(loss.cpu().detach().numpy().sum())
                 f1 = self._compute_matrix(X, y, mask, X_len)
                 train_f1.append(f1)
-                train_num = train_num + X.__len__()
-                print('train_loss: %.4f' % (np.sum(train_loss)/train_num),
-                      '\ttrain_f1: %.4f' % (np.mean(train_f1)), end='\r')
+                print('train_loss: %.4f' % np.mean(train_loss),
+                      '\ttrain_f1: %.4f' % np.mean(train_f1), end='\r')
             if dev_dataloader:
                 dev_loss, dev_f1 = [], []
-                dev_num = 0
                 self.eval()
                 for X, y, mask, X_len in dev_dataloader:
                     pred = self.forward(X, X_len)
@@ -231,9 +229,8 @@ class BiLSTM(nn.Module):
                     dev_loss.append(loss.cpu().detach().numpy().sum())
                     f1 = self._compute_matrix(X, y, mask, X_len)
                     dev_f1.append(f1)
-                    dev_num = dev_num + X.__len__()
-                print('train_loss: %.4f' % (np.sum(train_loss)/train_num), '\ttrain_f1: %.4f' % (np.mean(train_f1)),
-                      '\tdev_loss: %.4f' % (np.sum(dev_loss)/dev_num), '\tdev_f1: %.4f' % (np.mean(dev_f1)))
+                print('train_loss: %.4f' % np.mean(train_loss), '\ttrain_f1: %.4f' % np.mean(train_f1),
+                      '\tdev_loss: %.4f' % np.mean(dev_loss), '\tdev_f1: %.4f' % np.mean(dev_f1))
 
     def predict(self, tokenizer: Tokenizer, text, device):
         text_index = [tokenizer.encode(text)]
@@ -260,10 +257,10 @@ if __name__ == "__main__":
     num_embeddings = len(tokenizer.vocab)
     class_num = len(tokenizer.label_vocab)
     embedding_dim = 128
-    hidden_size = 129
+    hidden_size = 384
     bidirectional = True
-    train_batch_size = 64
-    epoch = 10
+    train_batch_size = 32
+    epoch = 4
     model_path = "models/bilstm.pth"
     # ///////////////////
     train_dataset = MyDataset(
@@ -279,9 +276,9 @@ if __name__ == "__main__":
                    hidden_size, bidirectional, class_num)
     model = model.to(device)
     # ///////////////////
-    # model.fit(train_dataloader, epoch, tokenizer,
-    #           dev_dataloader=dev_dataloader)
-    # torch.save(model.state_dict(), model_path)
+    model.fit(train_dataloader, epoch, tokenizer,
+              dev_dataloader=dev_dataloader)
+    torch.save(model.state_dict(), model_path)
     # ///////////////////
     model.load_state_dict(torch.load(model_path, map_location=device))
     while True:
